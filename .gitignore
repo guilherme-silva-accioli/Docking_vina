@@ -1,0 +1,9 @@
+# Ignorar dados pesados e resultados gerados por alvo
+targets/
+
+# Arquivos temporários e caches Python
+__pycache__/
+*.pyc
+*.pyo
+.DS_Store
+*~
