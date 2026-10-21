@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ==============================================================================
-# run_all.sh - Pipeline Completo de Docking Molecular (sem cofator)
+# run_all.sh - Pipeline Completo de Docking Molecular (com ou sem cofator)
 # ==============================================================================
 set -e
 
@@ -12,6 +12,7 @@ TARGET="${TARGET:-}"
 PDB_ID="${PDB_ID:-}"
 NATIVE_LIG="${NATIVE_LIG:-}"
 INCHIKEY_SRC="${INCHIKEY_SRC:-}"
+COFACTOR_RES="${COFACTOR_RES:-}"
 
 if [ -z "$TARGET" ]; then
     echo "[-] Erro: TARGET não foi definido!"
@@ -33,6 +34,9 @@ echo "    INICIANDO PIPELINE DE DOCKING MOLECULAR"
 echo "    Alvo:        ${TARGET}"
 echo "    PDB ID:      ${PDB_ID}"
 echo "    Ligante Nat: ${NATIVE_LIG}"
+if [ -n "$COFACTOR_RES" ]; then
+    echo "    Cofatores:   ${COFACTOR_RES}"
+fi
 if [ -n "$CONFIG_FILE" ]; then
     echo "    Config:      ${CONFIG_FILE}"
 fi
@@ -61,8 +65,13 @@ else
 fi
 
 echo ""
-echo ">>> [ETAPA 4/7] Preparando receptor..."
-bash "${SCRIPT_DIR}/04_prepare_receptor.sh" "$TARGET" "$PDB_ID"
+if [ -n "$COFACTOR_RES" ]; then
+    echo ">>> [ETAPA 4/7] Preparando receptor COM cofatores (${COFACTOR_RES})..."
+    bash "${SCRIPT_DIR}/04b_prepare_receptor_cofactor.sh" "$TARGET" "$PDB_ID" "$COFACTOR_RES"
+else
+    echo ">>> [ETAPA 4/7] Preparando receptor (sem cofator)..."
+    bash "${SCRIPT_DIR}/04_prepare_receptor.sh" "$TARGET" "$PDB_ID"
+fi
 
 echo ""
 echo ">>> [ETAPA 5/7] Baixando ligantes do PubChem..."

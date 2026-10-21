@@ -56,10 +56,12 @@ docking_alz/
 │   ├── 01_setup_target.sh             # Cria pastas do alvo e importa InChIKeys
 │   ├── 02_download_pdb.sh             # Download da estrutura cristalográfica (RCSB)
 │   ├── 03_download_ligands.sh         # Download de estruturas 3D do PubChem
-│   ├── 04_prepare_receptor.sh         # Limpeza do receptor e conversão para PDBQT
+│   ├── 04_prepare_receptor.sh         # Limpeza do receptor (sem cofator) e conversão para PDBQT
+│   ├── 04b_prepare_receptor_cofactor.sh # Preparação paralela do receptor COM cofatores/íons
 │   ├── 05_prepare_ligands.sh          # Protonação fisiológica a pH 7.4 e geração de PDBQT
 │   ├── 06_run_docking.sh              # Execução da triagem molecular no AutoDock Vina
 │   ├── 07_run_redocking.sh            # Extração de ligante nativo, docking e cálculo de RMSD
+│   ├── build_cofactor_templates.py    # Gerador de templates químicos JSON (Meeko v0.6+)
 │   ├── sanitize_charged_sdf.py        # Módulo de correção de valência em éteres (OpenBabel/RDKit)
 │   └── run_all.sh                     # Orquestrador do pipeline completo
 └── targets/                           # Diretório de dados por alvo
@@ -129,6 +131,7 @@ Conteúdo de um arquivo de configuração (ex: `configs/CCND1.env`):
 TARGET="CCND1"                 # Nome da pasta/alvo em targets/
 PDB_ID="2W96"                  # Código de 4 caracteres no RCSB PDB
 NATIVE_LIG="Z36"               # Código de 3 letras do ligante nativo no cristal
+COFACTOR_RES=""                # Cofatores separados por vírgula (ex: "GNP,MG" ou "HEM"). Vazio "" = sem cofator.
 
 # Caminho da pasta central de InChIKeys
 HUB_INCHIKEYS_DIR="/mnt/c/Users/gui-a/OneDrive/Desktop/TCC/Docking/hub_inchikeys"
@@ -208,7 +211,10 @@ cd ~/docking_alz
 ./scripts/07_run_redocking.sh
 
 # 4. Preparar o receptor com Meeko (gera receptor.pdbqt)
+# Opção A: Sem cofator
 ./scripts/04_prepare_receptor.sh
+# Opção B: Com cofatores (caso COFACTOR_RES esteja definido no .env ou passado por argumento)
+./scripts/04b_prepare_receptor_cofactor.sh AKT1 3O96 "GNP,MG"
 
 # 5. Baixar as estruturas 3D dos ligantes no PubChem
 ./scripts/03_download_ligands.sh

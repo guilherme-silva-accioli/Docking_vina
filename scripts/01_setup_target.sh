@@ -23,10 +23,14 @@ fi
 
 echo "[+] Configurando estrutura para o alvo: ${TARGET}"
 
-# Criar estrutura de pastas (sem cofator)
+# Criar estrutura de pastas
 mkdir -p scripts
 mkdir -p "targets/${TARGET}/receptor/raw"
 mkdir -p "targets/${TARGET}/receptor/prepared"
+if [ -n "${COFACTOR_RES:-}" ]; then
+    mkdir -p "targets/${TARGET}/receptor/cofactor"
+    mkdir -p "targets/${TARGET}/receptor/templates"
+fi
 mkdir -p "targets/${TARGET}/redocking/crystallographic"
 mkdir -p "targets/${TARGET}/redocking/prepared"
 mkdir -p "targets/${TARGET}/redocking/results"
