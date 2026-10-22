@@ -23,7 +23,7 @@ def sanitize_sdf(input_sdf, output_sdf):
         for atom in mol.GetAtoms():
             sym = atom.GetSymbol()
             chg = atom.GetFormalCharge()
-            val = atom.GetExplicitValence()
+            val = atom.GetValence(Chem.ValenceType.EXPLICIT)
 
             # Oxigênio com 2 ligações não pode ter carga -1 (bug do OpenBabel em éteres conjugados)
             if sym == "O" and val == 2 and chg == -1:

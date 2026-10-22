@@ -91,9 +91,10 @@ if [ -f "$LIG_RAW_PDB" ]; then
     fi
 fi
 
-# Passo 3: Converter para SDF com OpenBabel
-echo "[+] Convertendo ligante original para SDF..."
-obabel "$LIG_RAW_PDB" -O "$LIG_SDF"
+# Passo 3: Converter para SDF com OpenBabel (protonando a pH 7.4 + sanitização de valência)
+echo "[+] Convertendo ligante original para SDF (pH 7.4 + cargas Gasteiger)..."
+obabel "$LIG_RAW_PDB" -O "$LIG_SDF" -p 7.4 --partialcharge gasteiger
+python3 "${SCRIPT_DIR}/sanitize_charged_sdf.py" "$LIG_SDF" "$LIG_SDF"
 
 # Passo 4: Preparar ligante original com Meeko
 echo "[+] Preparando ligante nativo com Meeko..."

@@ -39,8 +39,9 @@ if [ -n "$SELECTED_CONFIG" ] && [ ! -f "$SELECTED_CONFIG" ] && [ -f "${PROJECT_R
     SELECTED_CONFIG="${PROJECT_ROOT}/${SELECTED_CONFIG}"
 fi
 
-# Carrega o arquivo selecionado
+# Carrega o arquivo selecionado (removendo possíveis quebras de linha CRLF do Windows)
 if [ -n "$SELECTED_CONFIG" ] && [ -f "$SELECTED_CONFIG" ]; then
+    sed -i 's/\r$//' "$SELECTED_CONFIG" 2>/dev/null || true
     # shellcheck source=/dev/null
     source "$SELECTED_CONFIG"
     CONFIG_FILE="$SELECTED_CONFIG"
