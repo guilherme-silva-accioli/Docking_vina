@@ -27,7 +27,7 @@ if ! command -v vina &> /dev/null || ! command -v mk_prepare_ligand.py &> /dev/n
     fi
 fi
 
-RAW_PDB="targets/${TARGET}/receptor/raw/${PDB_ID}.pdb"
+RAW_RECEPTOR=$(resolve_raw_receptor "$TARGET" "$PDB_ID")
 REDOCK_DIR="targets/${TARGET}/redocking"
 CONFIG_TXT="targets/${TARGET}/config.txt"
 
@@ -45,26 +45,61 @@ REDOCK_LOG="${REDOCK_DIR}/redocking.log"
 
 echo "[+] Iniciando processo de Redocking para o alvo ${TARGET} (Ligante nativo: ${NATIVE_LIG})..."
 
-# Passo 1: Extrair ligante nativo com ChimeraX
-if [ ! -f "$LIG_RAW_PDB" ]; then
-    if [ ! -f "$RAW_PDB" ]; then
-        echo "[-] Erro: Estrutura bruta não encontrada em ${RAW_PDB}"
+# Passo 1: Extrair ligante nativo com ChimeraX (ou ProDy fallback, suportando .pdb e .cif)
+if [ ! -f "$LIG_RAW_PDB" ] || [ ! -s "$LIG_RAW_PDB" ]; then
+    if [ ! -f "$RAW_RECEPTOR" ] || [ ! -s "$RAW_RECEPTOR" ]; then
+        echo "[-] Erro: Estrutura bruta não encontrada em ${RAW_RECEPTOR}"
         exit 1
     fi
 
     if command -v chimerax &> /dev/null; then
-        echo "[+] Extraindo ligante nativo '${NATIVE_LIG}' com ChimeraX..."
+        echo "[+] Extraindo ligante nativo '${NATIVE_LIG}' de ${RAW_RECEPTOR} com ChimeraX..."
         chimerax --nogui --cmd "
-        open ${RAW_PDB};
+        open ${RAW_RECEPTOR};
         delete ~:${NATIVE_LIG};
         save ${LIG_RAW_PDB};
         exit;
-        "
-    else
-        echo "[-] Erro: 'chimerax' não encontrado no PATH para extrair o ligante."
-        echo "    Extraia manualmente o ligante do PDB e salve em: ${LIG_RAW_PDB}"
-        exit 1
+        " || true
     fi
+
+    # Garantir que, se houver múltiplas cópias do ligante em cadeias distintas (homodímeros),
+    # apenas a primeira molécula/resíduo seja mantida (ou extrair via ProDy caso ChimeraX falhe)
+    python3 - "$RAW_RECEPTOR" "$NATIVE_LIG" "$LIG_RAW_PDB" << 'PYEOF'
+import os
+import sys
+import prody
+
+raw_rec, nat_lig, lig_pdb = sys.argv[1:4]
+
+if not os.path.isfile(lig_pdb) or os.path.getsize(lig_pdb) == 0:
+    if raw_rec.lower().endswith((".cif", ".mmcif")):
+        atoms = prody.parseMMCIF(raw_rec)
+    else:
+        atoms = prody.parsePDB(raw_rec)
+    sel = atoms.select(f"resname {nat_lig}")
+    if sel is None or sel.numAtoms() == 0:
+        print(f"[-] Erro: Ligante '{nat_lig}' não encontrado em {raw_rec}", file=sys.stderr)
+        sys.exit(1)
+    prody.writePDB(lig_pdb, sel)
+
+# Filtrar apenas a primeira instância (cadeia + resnum) para evitar média entre subunidades de dímeros
+kept_lines = []
+first_id = None
+with open(lig_pdb, "r", encoding="utf-8", errors="ignore") as f:
+    for line in f:
+        if line.startswith(("ATOM  ", "HETATM")):
+            res_key = line[21:27]
+            if first_id is None:
+                first_id = res_key
+            if res_key == first_id:
+                kept_lines.append(line)
+        elif not line.startswith("CONECT"):
+            kept_lines.append(line)
+
+if first_id is not None:
+    with open(lig_pdb, "w", encoding="utf-8", newline="\n") as f:
+        f.writelines(kept_lines)
+PYEOF
 else
     echo "[.] Ligante cristalográfico existente mantido: ${LIG_RAW_PDB}"
 fi

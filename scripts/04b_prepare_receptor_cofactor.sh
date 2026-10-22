@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # ==============================================================================
 # 04b_prepare_receptor_cofactor.sh - Preparação do receptor COM cofatores
+# Aceita estruturas brutas tanto em .pdb quanto em .cif (mmCIF).
 # Isola proteína + cofatores (ChimeraX), gera templates JSON (Meeko v0.6+)
 # e converte para receptor.pdbqt mantendo cofatores e íons coordenados.
 # ==============================================================================
@@ -41,67 +42,95 @@ if ! command -v mk_prepare_receptor.py &> /dev/null; then
     fi
 fi
 
-RAW_PDB="targets/${TARGET}/receptor/raw/${PDB_ID}.pdb"
+RAW_RECEPTOR=$(resolve_raw_receptor "$TARGET" "$PDB_ID")
 COFACTOR_DIR="targets/${TARGET}/receptor/cofactor"
 TEMPLATES_DIR="targets/${TARGET}/receptor/templates"
 PREPARED_DIR="targets/${TARGET}/receptor/prepared"
 
 COFACTOR_PDB="${COFACTOR_DIR}/cofactor_atoms.pdb"
 RECEPTOR_COF_PDB="${PREPARED_DIR}/receptor_with_cofactor.pdb"
+RECEPTOR_COF_CIF="${PREPARED_DIR}/receptor_with_cofactor.cif"
 TEMPLATE_JSON="${TEMPLATES_DIR}/cofactor_template.json"
 OUT_PDBQT="${PREPARED_DIR}/receptor.pdbqt"
 
 mkdir -p "$COFACTOR_DIR" "$TEMPLATES_DIR" "$PREPARED_DIR"
 
-echo "[+] Preparando receptor '${TARGET}' (${PDB_ID}) com cofator(es): ${COFACTOR_RES}"
+echo "[+] Preparando receptor '${TARGET}' (${RAW_RECEPTOR}) com cofator(es): ${COFACTOR_RES}"
 
 # Passo 1: Extrair cofatores e combinar proteína + cofatores
+RECEPTOR_COF_STRUCT=""
 if [ -f "$RECEPTOR_COF_PDB" ] && [ -s "$RECEPTOR_COF_PDB" ]; then
-    echo "[.] Encontrado arquivo existente: ${RECEPTOR_COF_PDB}"
+    RECEPTOR_COF_STRUCT="$RECEPTOR_COF_PDB"
+    echo "[.] Encontrado arquivo existente: ${RECEPTOR_COF_STRUCT}"
+elif [ -f "$RECEPTOR_COF_CIF" ] && [ -s "$RECEPTOR_COF_CIF" ]; then
+    RECEPTOR_COF_STRUCT="$RECEPTOR_COF_CIF"
+    echo "[.] Encontrado arquivo existente (.cif): ${RECEPTOR_COF_STRUCT}"
 else
-    if [ ! -f "$RAW_PDB" ]; then
-        echo "[-] Erro: Arquivo bruto ${RAW_PDB} não encontrado! Execute primeiro 02_download_pdb.sh"
+    if [ ! -f "$RAW_RECEPTOR" ] || [ ! -s "$RAW_RECEPTOR" ]; then
+        echo "[-] Erro: Arquivo bruto ${RAW_RECEPTOR} não encontrado! Execute primeiro 02_download_pdb.sh"
         exit 1
     fi
 
     if command -v chimerax &> /dev/null; then
         echo "    [+] Usando ChimeraX headless para isolar proteína e cofator(es) (${COFACTOR_RES})..."
         chimerax --nogui --cmd "
-        open ${RAW_PDB};
+        open ${RAW_RECEPTOR};
         delete solvent;
         select :${COFACTOR_RES};
         save ${COFACTOR_PDB} selectedOnly true;
         select protein | :${COFACTOR_RES};
         save ${RECEPTOR_COF_PDB} selectedOnly true;
         exit;
-        "
+        " || true
+
+        if [ -f "$RECEPTOR_COF_PDB" ] && [ -s "$RECEPTOR_COF_PDB" ]; then
+            RECEPTOR_COF_STRUCT="$RECEPTOR_COF_PDB"
+        else
+            chimerax --nogui --cmd "
+            open ${RAW_RECEPTOR};
+            delete solvent;
+            select :${COFACTOR_RES};
+            save ${COFACTOR_PDB} selectedOnly true;
+            select protein | :${COFACTOR_RES};
+            save ${RECEPTOR_COF_CIF} selectedOnly true;
+            exit;
+            " || true
+            if [ -f "$RECEPTOR_COF_CIF" ] && [ -s "$RECEPTOR_COF_CIF" ]; then
+                RECEPTOR_COF_STRUCT="$RECEPTOR_COF_CIF"
+            fi
+        fi
     fi
 
     # Fallback via Python/ProDy caso o ChimeraX não esteja instalado ou não tenha gerado os arquivos
-    if [ ! -f "$RECEPTOR_COF_PDB" ] || [ ! -s "$RECEPTOR_COF_PDB" ]; then
+    if [ -z "$RECEPTOR_COF_STRUCT" ]; then
         echo "    [+] Isolando proteína e cofator(es) (${COFACTOR_RES}) via ProDy..."
-        python3 - "$RAW_PDB" "$COFACTOR_RES" "$COFACTOR_PDB" "$RECEPTOR_COF_PDB" << 'PYEOF'
+        python3 - "$RAW_RECEPTOR" "$COFACTOR_RES" "$COFACTOR_PDB" "$RECEPTOR_COF_PDB" << 'PYEOF'
 import sys
 import prody
 
-raw_pdb, cofactor_res, cof_pdb, rec_cof_pdb = sys.argv[1:5]
+raw_path, cofactor_res, cof_pdb, rec_cof_pdb = sys.argv[1:5]
 res_list = [r.strip().upper() for r in cofactor_res.split(",") if r.strip()]
 res_sel_str = " or ".join([f"resname {r}" for r in res_list])
 
-atoms = prody.parsePDB(raw_pdb)
+if raw_path.lower().endswith((".cif", ".mmcif")):
+    atoms = prody.parseMMCIF(raw_path)
+else:
+    atoms = prody.parsePDB(raw_path)
+
 cof_sel = atoms.select(f"({res_sel_str}) and not water")
 if cof_sel is None or cof_sel.numAtoms() == 0:
-    print(f"[-] Erro: Nenhum átomo encontrado para os cofatores {res_list} em {raw_pdb}", file=sys.stderr)
+    print(f"[-] Erro: Nenhum átomo encontrado para os cofatores {res_list} em {raw_path}", file=sys.stderr)
     sys.exit(1)
 prody.writePDB(cof_pdb, cof_sel)
 
 rec_sel = atoms.select(f"(protein or ({res_sel_str})) and not water")
 prody.writePDB(rec_cof_pdb, rec_sel)
 PYEOF
+        RECEPTOR_COF_STRUCT="$RECEPTOR_COF_PDB"
     fi
 
     echo "    [✓] Cofator isolado salvo em: ${COFACTOR_PDB}"
-    echo "    [✓] Proteína + cofator salvos em: ${RECEPTOR_COF_PDB}"
+    echo "    [✓] Proteína + cofator salvos em: ${RECEPTOR_COF_STRUCT}"
 fi
 
 # Passo 2: Construir template JSON para cofatores orgânicos (Meeko v0.6+)
@@ -120,9 +149,9 @@ if ! command -v mk_prepare_receptor.py &> /dev/null; then
     exit 1
 fi
 
-echo "[+] Convertendo receptor com cofator para PDBQT via Meeko..."
+echo "[+] Convertendo receptor com cofator (${RECEPTOR_COF_STRUCT}) para PDBQT via Meeko..."
 mk_prepare_receptor.py \
-  -i "$RECEPTOR_COF_PDB" \
+  -i "$RECEPTOR_COF_STRUCT" \
   "${ADD_TEMPLATES_ARGS[@]}" \
   -p "$OUT_PDBQT" \
   --default_altloc A \

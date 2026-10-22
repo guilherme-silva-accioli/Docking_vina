@@ -68,6 +68,44 @@ COFACTOR_RES="${COFACTOR_RES:-}"
 BLIND_DOCKING="${BLIND_DOCKING:-false}"
 BLIND_PADDING="${BLIND_PADDING:-6.0}"
 BLIND_EXHAUSTIVENESS="${BLIND_EXHAUSTIVENESS:-16}"
-export TARGET PDB_ID NATIVE_LIG INCHIKEY_SRC COFACTOR_RES
+RECEPTOR_FORMAT="${RECEPTOR_FORMAT:-auto}"
+export TARGET PDB_ID NATIVE_LIG INCHIKEY_SRC COFACTOR_RES RECEPTOR_FORMAT
 export BLIND_DOCKING BLIND_PADDING BLIND_EXHAUSTIVENESS
 export SIZE_X SIZE_Y SIZE_Z EXHAUSTIVENESS NUM_MODES ENERGY_RANGE HUB_INCHIKEYS_DIR
+
+# Função utilitária para localizar arquivo bruto do receptor (.pdb, .cif ou .mmcif)
+resolve_raw_receptor() {
+    local tgt="${1:-${TARGET:-}}"
+    local pid="${2:-${PDB_ID:-}}"
+    local raw_dir="targets/${tgt}/receptor/raw"
+    # Remove extensão caso o usuário tenha colocado .pdb ou .cif no PDB_ID
+    local base_id="${pid%.pdb}"
+    base_id="${base_id%.cif}"
+    base_id="${base_id%.mmcif}"
+
+    if [ -n "$base_id" ]; then
+        for ext in pdb cif mmcif PDB CIF MMCIF; do
+            if [ -f "${raw_dir}/${base_id}.${ext}" ] && [ -s "${raw_dir}/${base_id}.${ext}" ]; then
+                echo "${raw_dir}/${base_id}.${ext}"
+                return 0
+            fi
+        done
+    fi
+
+    # Fallback: procurar qualquer arquivo .pdb ou .cif existente em receptor/raw/
+    local found=""
+    found=$(find "$raw_dir" -maxdepth 1 -type f \( -iname "*.pdb" -o -iname "*.cif" -o -iname "*.mmcif" \) 2>/dev/null | head -n 1 || true)
+    if [ -n "$found" ] && [ -s "$found" ]; then
+        echo "$found"
+        return 0
+    fi
+
+    # Se ainda não existir, retorna o caminho padrão esperado (.pdb ou .cif)
+    if [ "${RECEPTOR_FORMAT,,}" = "cif" ] || [[ "${pid,,}" == *.cif ]]; then
+        echo "${raw_dir}/${base_id}.cif"
+    else
+        echo "${raw_dir}/${base_id}.pdb"
+    fi
+    return 0
+}
+export -f resolve_raw_receptor

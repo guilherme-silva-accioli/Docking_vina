@@ -28,8 +28,10 @@ fi
 CONFIG_TXT="targets/${TARGET}/config.txt"
 RECEPTOR_PDBQT="targets/${TARGET}/receptor/prepared/receptor.pdbqt"
 RECEPTOR_COF_PDB="targets/${TARGET}/receptor/prepared/receptor_with_cofactor.pdb"
+RECEPTOR_COF_CIF="targets/${TARGET}/receptor/prepared/receptor_with_cofactor.cif"
 CLEAN_PDB="targets/${TARGET}/receptor/prepared/protein_clean.pdb"
-RAW_PDB="targets/${TARGET}/receptor/raw/${PDB_ID}.pdb"
+CLEAN_CIF="targets/${TARGET}/receptor/prepared/protein_clean.cif"
+RAW_RECEPTOR=$(resolve_raw_receptor "$TARGET" "$PDB_ID")
 
 # Selecionar a melhor estrutura disponível do receptor para medir a caixa
 SOURCE_STRUCT=""
@@ -39,10 +41,14 @@ if [ -f "$RECEPTOR_PDBQT" ] && [ -s "$RECEPTOR_PDBQT" ]; then
     SOURCE_STRUCT="$RECEPTOR_PDBQT"
 elif [ -f "$RECEPTOR_COF_PDB" ] && [ -s "$RECEPTOR_COF_PDB" ]; then
     SOURCE_STRUCT="$RECEPTOR_COF_PDB"
+elif [ -f "$RECEPTOR_COF_CIF" ] && [ -s "$RECEPTOR_COF_CIF" ]; then
+    SOURCE_STRUCT="$RECEPTOR_COF_CIF"
 elif [ -f "$CLEAN_PDB" ] && [ -s "$CLEAN_PDB" ]; then
     SOURCE_STRUCT="$CLEAN_PDB"
-elif [ -n "$PDB_ID" ] && [ -f "$RAW_PDB" ] && [ -s "$RAW_PDB" ]; then
-    SOURCE_STRUCT="$RAW_PDB"
+elif [ -f "$CLEAN_CIF" ] && [ -s "$CLEAN_CIF" ]; then
+    SOURCE_STRUCT="$CLEAN_CIF"
+elif [ -f "$RAW_RECEPTOR" ] && [ -s "$RAW_RECEPTOR" ]; then
+    SOURCE_STRUCT="$RAW_RECEPTOR"
     ONLY_ATOM_RECORDS="1"
 else
     echo "[-] Erro: Nenhuma estrutura do receptor encontrada para '${TARGET}'!"
@@ -87,23 +93,33 @@ min_exh = int(float(sys.argv[5]))
 config_path = sys.argv[6]
 
 xs, ys, zs = [], [], []
-with open(struct_path, "r", encoding="utf-8", errors="ignore") as f:
-    for line in f:
-        if only_atom:
-            if not line.startswith("ATOM  "):
+if struct_path.lower().endswith((".cif", ".mmcif")):
+    import prody
+    atoms = prody.parseMMCIF(struct_path)
+    if only_atom:
+        atoms = atoms.select("protein and not water")
+    coords = atoms.getCoords()
+    xs = coords[:, 0].tolist()
+    ys = coords[:, 1].tolist()
+    zs = coords[:, 2].tolist()
+else:
+    with open(struct_path, "r", encoding="utf-8", errors="ignore") as f:
+        for line in f:
+            if only_atom:
+                if not line.startswith("ATOM  "):
+                    continue
+            else:
+                if not line.startswith(("ATOM  ", "HETATM")):
+                    continue
+            try:
+                x = float(line[30:38])
+                y = float(line[38:46])
+                z = float(line[46:54])
+                xs.append(x)
+                ys.append(y)
+                zs.append(z)
+            except ValueError:
                 continue
-        else:
-            if not line.startswith(("ATOM  ", "HETATM")):
-                continue
-        try:
-            x = float(line[30:38])
-            y = float(line[38:46])
-            z = float(line[46:54])
-            xs.append(x)
-            ys.append(y)
-            zs.append(z)
-        except ValueError:
-            continue
 
 if not xs:
     print(f"[-] Erro: Nenhuma coordenada atômica lida de {struct_path}", file=sys.stderr)
