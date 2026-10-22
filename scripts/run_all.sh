@@ -13,6 +13,9 @@ PDB_ID="${PDB_ID:-}"
 NATIVE_LIG="${NATIVE_LIG:-}"
 INCHIKEY_SRC="${INCHIKEY_SRC:-}"
 COFACTOR_RES="${COFACTOR_RES:-}"
+BLIND_DOCKING="${BLIND_DOCKING:-false}"
+BLIND_PADDING="${BLIND_PADDING:-6.0}"
+BLIND_EXHAUSTIVENESS="${BLIND_EXHAUSTIVENESS:-16}"
 
 if [ -z "$TARGET" ]; then
     echo "[-] Erro: TARGET não foi definido!"
@@ -33,7 +36,11 @@ echo "=========================================================="
 echo "    INICIANDO PIPELINE DE DOCKING MOLECULAR"
 echo "    Alvo:        ${TARGET}"
 echo "    PDB ID:      ${PDB_ID}"
-echo "    Ligante Nat: ${NATIVE_LIG}"
+if [ "${BLIND_DOCKING,,}" = "true" ] || [ "${BLIND_DOCKING}" = "1" ] || [ -z "$NATIVE_LIG" ]; then
+    echo "    Modo:        Blind Docking (Proteína Inteira, Padding +${BLIND_PADDING} Å)"
+else
+    echo "    Modo:        Sítio-Específico (Ligante Nativo: ${NATIVE_LIG})"
+fi
 if [ -n "$COFACTOR_RES" ]; then
     echo "    Cofatores:   ${COFACTOR_RES}"
 fi
@@ -53,24 +60,24 @@ echo ""
 echo ">>> [ETAPA 2/7] Baixando estrutura do receptor..."
 bash "${SCRIPT_DIR}/02_download_pdb.sh" "$TARGET" "$PDB_ID"
 
-if [ -n "$NATIVE_LIG" ]; then
-    echo ""
-    echo ">>> [ETAPA 3/7] Executando Redocking (Controle Positivo e Centro do Grid)..."
-    bash "${SCRIPT_DIR}/07_run_redocking.sh" "$TARGET" "$PDB_ID" "$NATIVE_LIG" || {
-        echo "[-] Redocking falhou ou foi ignorado. Continuando..."
-    }
+echo ""
+if [ -n "$COFACTOR_RES" ]; then
+    echo ">>> [ETAPA 3/7] Preparando receptor COM cofatores (${COFACTOR_RES})..."
+    bash "${SCRIPT_DIR}/04b_prepare_receptor_cofactor.sh" "$TARGET" "$PDB_ID" "$COFACTOR_RES"
 else
-    echo ""
-    echo ">>> [ETAPA 3/7] NATIVE_LIG não definido. Pulando redocking."
+    echo ">>> [ETAPA 3/7] Preparando receptor (sem cofator)..."
+    bash "${SCRIPT_DIR}/04_prepare_receptor.sh" "$TARGET" "$PDB_ID"
 fi
 
 echo ""
-if [ -n "$COFACTOR_RES" ]; then
-    echo ">>> [ETAPA 4/7] Preparando receptor COM cofatores (${COFACTOR_RES})..."
-    bash "${SCRIPT_DIR}/04b_prepare_receptor_cofactor.sh" "$TARGET" "$PDB_ID" "$COFACTOR_RES"
+if [ "${BLIND_DOCKING,,}" = "true" ] || [ "${BLIND_DOCKING}" = "1" ] || [ -z "$NATIVE_LIG" ]; then
+    echo ">>> [ETAPA 4/7] Configurando Grid Box para Blind Docking (Proteína Inteira)..."
+    bash "${SCRIPT_DIR}/07b_setup_blind_box.sh" "$TARGET" "$BLIND_PADDING" "$BLIND_EXHAUSTIVENESS"
 else
-    echo ">>> [ETAPA 4/7] Preparando receptor (sem cofator)..."
-    bash "${SCRIPT_DIR}/04_prepare_receptor.sh" "$TARGET" "$PDB_ID"
+    echo ">>> [ETAPA 4/7] Executando Redocking (Controle Positivo e Centro do Grid)..."
+    bash "${SCRIPT_DIR}/07_run_redocking.sh" "$TARGET" "$PDB_ID" "$NATIVE_LIG" || {
+        echo "[-] Redocking falhou ou foi ignorado. Continuando..."
+    }
 fi
 
 echo ""

@@ -61,6 +61,7 @@ docking_alz/
 │   ├── 05_prepare_ligands.sh          # Protonação fisiológica a pH 7.4 e geração de PDBQT
 │   ├── 06_run_docking.sh              # Execução da triagem molecular no AutoDock Vina
 │   ├── 07_run_redocking.sh            # Extração de ligante nativo, docking e cálculo de RMSD
+│   ├── 07b_setup_blind_box.sh         # Configuração automática de Bounding Box para Blind Docking
 │   ├── build_cofactor_templates.py    # Gerador de templates químicos JSON (Meeko v0.6+)
 │   ├── sanitize_charged_sdf.py        # Módulo de correção de valência em éteres (OpenBabel/RDKit)
 │   └── run_all.sh                     # Orquestrador do pipeline completo
@@ -145,6 +146,12 @@ SIZE_Z="22.0"
 EXHAUSTIVENESS="8"             # Exaustividade da busca conformacional (padrão: 8)
 NUM_MODES="9"                  # Número máximo de poses geradas por ligante
 ENERGY_RANGE="3"               # Janela máxima de energia relativa (kcal/mol)
+
+# Modo Blind Docking (Docking Cego na proteína inteira)
+# Ativado automaticamente se BLIND_DOCKING="true" ou se NATIVE_LIG="" estiver vazio
+BLIND_DOCKING="false"
+BLIND_PADDING="6.0"            # Margem extra (Å) somada às dimensões (max - min) da proteína
+BLIND_EXHAUSTIVENESS="16"      # Exaustividade mínima recomendada para o volume total da proteína
 ```
 
 > [!TIP]
@@ -207,14 +214,17 @@ cd ~/docking_alz
 # 2. Baixar a estrutura do PDB
 ./scripts/02_download_pdb.sh
 
-# 3. Executar o Redocking (valida RMSD e calcula o centro da cavidade no config.txt)
-./scripts/07_run_redocking.sh
-
-# 4. Preparar o receptor com Meeko (gera receptor.pdbqt)
+# 3. Preparar o receptor com Meeko (gera receptor.pdbqt)
 # Opção A: Sem cofator
 ./scripts/04_prepare_receptor.sh
 # Opção B: Com cofatores (caso COFACTOR_RES esteja definido no .env ou passado por argumento)
 ./scripts/04b_prepare_receptor_cofactor.sh AKT1 3O96 "GNP,MG"
+
+# 4. Definir a Grid Box (Sítio-Específico vs. Blind Docking)
+# Opção A: Redocking (valida RMSD e calcula o centro da cavidade ativa no config.txt)
+./scripts/07_run_redocking.sh
+# Opção B: Blind Docking (calcula Bounding Box da proteína inteira + 6.0 Å padding e exhaustiveness 16)
+./scripts/07b_setup_blind_box.sh AKT1
 
 # 5. Baixar as estruturas 3D dos ligantes no PubChem
 ./scripts/03_download_ligands.sh
