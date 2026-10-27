@@ -11,3 +11,7 @@ __pycache__/
 *.pyo
 .DS_Store
 *~
+
+# Binários PDF/XML de artigos (mantendo catálogo e Markdowns versionados)
+papers/pdfs/
+papers/xml/
