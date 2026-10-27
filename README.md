@@ -45,6 +45,12 @@ flowchart TD
 ```text
 docking_alz/
 ├── README.md                          # Documentação geral do projeto
+├── analysis/                          # Scripts de pós-processamento e visualização
+│   └── heatmap/                       # Geração do Heatmap multi-alvo (R / ggplot2)
+│       ├── heatmap.R                  # Script R que agrega CSVs, busca nomes no PubChem e plota
+│       ├── compound_names.csv         # Dicionário cache editável (InChIKey -> Nome do Composto)
+│       ├── results_matrix.csv         # Matriz consolidada Alvos x Ligantes (kcal/mol)
+│       └── heatmap_docking.png        # Figura final de alta resolução (600 DPI)
 ├── configs/                           # Arquivos de configuração individualizados por alvo
 │   ├── template.env                   # Modelo para criação de novos alvos
 │   ├── AKT1.env                       # Configuração para AKT1 (3O96 / IQO)
@@ -62,6 +68,7 @@ docking_alz/
 │   ├── 06_run_docking.sh              # Execução da triagem molecular no AutoDock Vina
 │   ├── 07_run_redocking.sh            # Extração de ligante nativo, docking e cálculo de RMSD
 │   ├── 07b_setup_blind_box.sh         # Configuração automática de Bounding Box para Blind Docking
+│   ├── 08_plot_heatmap.sh             # Agregação multi-alvo e geração de Heatmap em R
 │   ├── build_cofactor_templates.py    # Gerador de templates químicos JSON (Meeko v0.6+)
 │   ├── sanitize_charged_sdf.py        # Módulo de correção de valência em éteres (OpenBabel/RDKit)
 │   └── run_all.sh                     # Orquestrador do pipeline completo
@@ -234,6 +241,9 @@ cd ~/docking_alz
 
 # 7. Executar a triagem de docking no AutoDock Vina
 ./scripts/06_run_docking.sh
+
+# 8. Gerar o Heatmap comparativo entre todos os alvos (Top-10 ligantes por alvo)
+./scripts/08_plot_heatmap.sh 10
 ```
 
 ---
@@ -280,6 +290,19 @@ Todos os arquivos gerados após o docking ficam organizados em `targets/${TARGET
   `targets/${TARGET}/results/poses/*_out.pdbqt`
 * **Logs do AutoDock Vina:**
   `targets/${TARGET}/results/logs/*.log`
+
+### 📈 Heatmap Comparativo Multi-Alvo (`analysis/heatmap/`)
+Para consolidar automaticamente os resultados (`docking_affinities.csv`) de todos os alvos em `targets/`, traduzir os `InChIKeys` para nomes comuns via PubChem e gerar o mapa de calor em alta resolução (600 DPI):
+```bash
+# Padrão: União dos Top-10 melhores ligantes de cada alvo
+./scripts/08_plot_heatmap.sh
+
+# Ou especificando Top-N customizado (ex: Top-15 por alvo):
+./scripts/08_plot_heatmap.sh 15
+```
+* **Matriz Consolidada (CSV):** `analysis/heatmap/results_matrix.csv`
+* **Dicionário de Nomes Editável (Cache):** `analysis/heatmap/compound_names.csv` *(você pode editar a coluna `Nome` manualmente para personalizar os rótulos do gráfico)*
+* **Imagem do Heatmap:** `analysis/heatmap/heatmap_docking.png`
 
 ---
 

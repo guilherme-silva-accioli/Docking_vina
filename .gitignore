@@ -1,6 +1,10 @@
 # Ignorar dados pesados e resultados gerados por alvo
 targets/
 
+# Saídas geradas do heatmap (mantendo scripts e cache de nomes versionados)
+analysis/heatmap/results_matrix.csv
+analysis/heatmap/*.png
+
 # Arquivos temporários e caches Python
 __pycache__/
 *.pyc
