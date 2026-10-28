@@ -54,7 +54,7 @@ get_script_dir <- function() {
 }
 
 HEATMAP_DIR <- get_script_dir()
-PROJECT_ROOT <- if ( length(args) >= 2 && dir.exists(args[2]) ) {
+PROJECT_ROOT <- if (length(args) >= 2 && dir.exists(args[2])) {
   normalizePath(args[2], winslash = "/")
 } else {
   normalizePath(file.path(HEATMAP_DIR, "..", ".."), winslash = "/")
@@ -66,11 +66,11 @@ MATRIX_CSV <- file.path(HEATMAP_DIR, "results_matrix.csv")
 OUT_PNG <- file.path(HEATMAP_DIR, "heatmap_docking.png")
 
 cat(sprintf("[+] Diretório do projeto: %s\n", PROJECT_ROOT))
-cat(sprintf("[+] Selecionando Top-%d ligantes por alvo...\n", TOP_N))
+cat(sprintf("[+] Selecionando Top-%d ligantes únicos (sem repetir estereoisômeros) por alvo...\n", TOP_N))
 
 # %% cell 3
 # ------------------------------------------------------------
-# 3. Ler CSVs de todos os alvos, buscar nomes no PubChem e gerar matriz
+# 3. Ler CSVs de todos os alvos, deduplicar estereoisômeros e buscar nomes/CIDs no PubChem
 # ------------------------------------------------------------
 csv_files <- Sys.glob(file.path(TARGETS_DIR, "*", "results", "summary", "docking_affinities.csv"))
 if (length(csv_files) == 0) {
@@ -86,115 +86,235 @@ lista_alvos <- lapply(csv_files, function(f) {
   df
 })
 
-todos_resultados <- bind_rows(lista_alvos) %>%
+todos_resultados_raw <- bind_rows(lista_alvos) %>%
   mutate(
     InChIKey = sub("_charged$", "", trimws(ligand)),
+    Bloco1 = substr(InChIKey, 1, 14),
     Docking = suppressWarnings(as.numeric(affinity_kcal_mol))
   ) %>%
   filter(!is.na(Docking), nzchar(InChIKey))
 
-# Selecionar a união dos Top-N ligantes (menor energia = mais negativo) de cada alvo
-top_inchikeys <- todos_resultados %>%
+# Identificar o melhor estereoisômero global para cada conectividade (Bloco1)
+melhor_isomero_por_bloco <- todos_resultados_raw %>%
+  group_by(Bloco1, InChIKey) %>%
+  summarise(melhor_global = min(Docking, na.rm = TRUE), .groups = "drop") %>%
+  arrange(Bloco1, melhor_global, InChIKey) %>%
+  group_by(Bloco1) %>%
+  slice(1) %>%
+  ungroup() %>%
+  select(Bloco1, Rep_InChIKey = InChIKey)
+
+# Para cada (Gene, Bloco1), manter apenas a melhor afinidade (melhor estereoisômero)
+todos_resultados <- todos_resultados_raw %>%
+  group_by(Gene, Bloco1) %>%
+  slice_min(order_by = Docking, n = 1, with_ties = FALSE) %>%
+  ungroup() %>%
+  left_join(melhor_isomero_por_bloco, by = "Bloco1")
+
+# Selecionar a união dos Top-N compostos (por conectividade Bloco1) de cada alvo
+top_blocos <- todos_resultados %>%
   group_by(Gene) %>%
   slice_min(order_by = Docking, n = TOP_N, with_ties = FALSE) %>%
   ungroup() %>%
-  pull(InChIKey) %>%
+  pull(Bloco1) %>%
   unique()
 
-cat(sprintf("[+] Total de alvos lidos: %d | Ligantes únicos no Top-%d: %d\n",
+top_inchikeys <- melhor_isomero_por_bloco %>%
+  filter(Bloco1 %in% top_blocos) %>%
+  pull(Rep_InChIKey) %>%
+  unique()
+
+cat(sprintf("[+] Total de alvos lidos: %d | Compostos únicos no Top-%d: %d\n",
             n_distinct(todos_resultados$Gene), TOP_N, length(top_inchikeys)))
 
-# Carregar ou criar cache de nomes de compostos (PubChem Title / IUPAC)
+# Funções auxiliares para classificar nomes triviais vs. códigos/IUPAC
+eh_nome_trivial <- function(s) {
+  if (is.null(s) || is.na(s) || !nzchar(trimws(s))) return(FALSE)
+  s <- trimws(s)
+  if (nchar(s) < 4 || nchar(s) > 30) return(FALSE)
+  # Ignorar fórmulas moleculares (ex: C25H26O4, C16H12O6)
+  if (grepl("^C[0-9]+H[0-9]+", s, ignore.case = TRUE)) return(FALSE)
+  # Ignorar siglas curtas com hífen e número (ex: SPF-1, SPF-2, HY-123)
+  if (grepl("^[A-Z]{1,4}-[0-9]+", s, ignore.case = TRUE)) return(FALSE)
+  # Ignorar InChI, SMILES, URLs ou códigos de bancos de dados / números CAS
+  if (grepl("^(InChI|1S/|https?:|SCHEMBL|CHEMBL|DTXSID|DTXCID|CHEBI:|HMS|BDBM|ZINC|AKOS|CS-|HY-|MFCD|AS-|FT-|ST[0-9]|AC1[0-9]|AB[0-9]|NCGC|LS-|DB-|SB-|MLS|SMR|SR-|RefChem|LMPK|AA-|CID|CNP|MTBLC|NSC|EINECS|CCRIS|GTPL|UNII|HSDB|BRN|NCI|C[0-9]{5,}|Q[0-9]{4,}|J[0-9]+\\.)", s, ignore.case = TRUE)) return(FALSE)
+  if (grepl("^[0-9]+-[0-9]+-[0-9]+$", s)) return(FALSE)
+  if (grepl("^[0-9A-Z]{10,}$", s)) return(FALSE)
+  if (grepl("^[A-Z]{14}-[A-Z]{10}-[A-Z]$", s)) return(FALSE)
+  if (grepl("^[0-9., %+-]+$", s)) return(FALSE)
+  if (grepl("[=\\#\\@\\/\\\\]", s)) return(FALSE)
+  # Permitir nomes triviais de 1 ou 2 palavras sem locantes numéricos (ex: Abyssinone III, Ovalichromene, Shinflavanone, Mosloflavanone, Pongamone C)
+  if (grepl("^[A-Za-z]{4,}( [A-Za-z0-9]{1,4})?$", s)) return(TRUE)
+  # Ignorar nomes sistemáticos IUPAC com locantes/parênteses/colchetes
+  if (grepl("(dihydro|chromen|pyrano|benzodioxol|benzofuran|methoxyphenyl|hydroxyphenyl|dimethoxyphenyl|methylenedioxy|flavanone|cyclohex|furo\\[|dioxolo\\[|benzo\\[|dipyran|propenyl|butenyl|pentenyl|\\[|\\]|\\([0-9RSEZ,]+\\))", s, ignore.case = TRUE)) {
+    return(FALSE)
+  }
+  return(TRUE)
+}
+
+limpar_nome_trivial <- function(s) {
+  s <- trimws(s)
+  # Corrigir "PongamoneC" -> "Pongamone C"
+  s <- sub("^([A-Za-z]{5,})([A-Z])$", "\\1 \\2", s)
+  if (toupper(s) == s && nchar(s) > 5) {
+    # Converter "CRYPTOCARYANONE A" -> "Cryptocaryanone A"
+    palavras <- strsplit(s, " ")[[1]]
+    palavras <- sapply(palavras, function(w) {
+      if (nchar(w) <= 2) w else paste0(toupper(substr(w, 1, 1)), tolower(substr(w, 2, nchar(w))))
+    })
+    s <- paste(palavras, collapse = " ")
+  }
+  return(s)
+}
+
+buscar_info_pubchem <- function(ik) {
+  bloco1 <- substr(ik, 1, 14)
+  cid_principal <- NA_character_
+  nome_iupac <- NA_character_
+
+  # 1. Propriedades básicas (CID, Title, IUPACName) do InChIKey exato
+  url_prop <- sprintf("https://pubchem.ncbi.nlm.nih.gov/rest/pug/compound/inchikey/%s/property/Title,IUPACName/JSON", ik)
+  res_prop <- tryCatch(jsonlite::fromJSON(url_prop), error = function(e) NULL)
+  if (!is.null(res_prop) && !is.null(res_prop$PropertyTable$Properties)) {
+    props <- res_prop$PropertyTable$Properties
+    cid_principal <- as.character(props$CID[1])
+    titulo <- if ("Title" %in% names(props)) as.character(props$Title[1]) else NA_character_
+    iupac <- if ("IUPACName" %in% names(props)) as.character(props$IUPACName[1]) else NA_character_
+    nome_iupac <- if (!is.na(titulo) && nzchar(titulo)) titulo else iupac
+    if (eh_nome_trivial(titulo)) {
+      return(list(CID = cid_principal, Nome = limpar_nome_trivial(titulo), Nome_Completo = nome_iupac, Fonte = "PubChem_Title"))
+    }
+  }
+
+  # 1b. Verificar conectividade plana (<Bloco1>-UHFFFAOYSA-N) diretamente
+  flat_ik <- paste0(bloco1, "-UHFFFAOYSA-N")
+  if (ik != flat_ik) {
+    Sys.sleep(0.12)
+    url_flat <- sprintf("https://pubchem.ncbi.nlm.nih.gov/rest/pug/compound/inchikey/%s/property/Title/JSON", flat_ik)
+    res_flat <- tryCatch(jsonlite::fromJSON(url_flat), error = function(e) NULL)
+    if (!is.null(res_flat) && !is.null(res_flat$PropertyTable$Properties)) {
+      t_flat <- as.character(res_flat$PropertyTable$Properties$Title[1])
+      if (eh_nome_trivial(t_flat)) {
+        return(list(CID = cid_principal, Nome = limpar_nome_trivial(t_flat), Nome_Completo = nome_iupac, Fonte = "PubChem_Flat_Title"))
+      }
+    }
+  }
+
+  # 2. Verificar todos os CIDs de mesma conectividade (cids_type=same_connectivity)
+  cids_conect <- character()
+  url_cids <- sprintf("https://pubchem.ncbi.nlm.nih.gov/rest/pug/compound/inchikey/%s/cids/JSON?cids_type=same_connectivity", ik)
+  res_cids <- tryCatch(jsonlite::fromJSON(url_cids), error = function(e) NULL)
+  if (!is.null(res_cids) && !is.null(res_cids$IdentifierList$CID)) {
+    cids_conect <- as.character(head(res_cids$IdentifierList$CID, 15))
+  }
+  if (!is.na(cid_principal)) {
+    cids_conect <- unique(c(cid_principal, cids_conect))
+  }
+
+  if (length(cids_conect) > 0) {
+    cid_csv <- paste(cids_conect, collapse = ",")
+    # 2a. Títulos dos isômeros de mesma conectividade
+    Sys.sleep(0.15)
+    url_t <- sprintf("https://pubchem.ncbi.nlm.nih.gov/rest/pug/compound/cid/%s/property/Title/JSON", cid_csv)
+    res_t <- tryCatch(jsonlite::fromJSON(url_t), error = function(e) NULL)
+    if (!is.null(res_t) && !is.null(res_t$PropertyTable$Properties)) {
+      for (t_cand in res_t$PropertyTable$Properties$Title) {
+        if (eh_nome_trivial(t_cand)) {
+          return(list(CID = cid_principal, Nome = limpar_nome_trivial(t_cand), Nome_Completo = nome_iupac, Fonte = "PubChem_Connectivity_Title"))
+        }
+      }
+    }
+
+    # 2b. Sinônimos de todos os CIDs de mesma conectividade
+    Sys.sleep(0.15)
+    url_s <- sprintf("https://pubchem.ncbi.nlm.nih.gov/rest/pug/compound/cid/%s/synonyms/JSON", cid_csv)
+    res_s <- tryCatch(jsonlite::fromJSON(url_s), error = function(e) NULL)
+    if (!is.null(res_s) && !is.null(res_s$InformationList$Information)) {
+      syns <- unlist(res_s$InformationList$Information$Synonym)
+      for (s_cand in syns) {
+        if (eh_nome_trivial(s_cand)) {
+          return(list(CID = cid_principal, Nome = limpar_nome_trivial(s_cand), Nome_Completo = nome_iupac, Fonte = "PubChem_Synonym"))
+        }
+      }
+    }
+  }
+
+  # 3. Verificar PUG View (Names and Identifiers -> Wikidata / Removed Synonyms como Khonklonginol G, Carsifuran A, Pongamone C, SPF-1/2)
+  if (!is.na(cid_principal)) {
+    Sys.sleep(0.15)
+    url_pv <- sprintf("https://pubchem.ncbi.nlm.nih.gov/rest/pug_view/data/compound/%s/JSON?heading=Names+and+Identifiers", cid_principal)
+    txt_pv <- tryCatch(suppressWarnings(paste(readLines(url_pv, warn = FALSE, encoding = "UTF-8"), collapse = "\n")), error = function(e) "")
+    if (nzchar(txt_pv)) {
+      matches <- regmatches(txt_pv, gregexpr('"String"\\s*:\\s*"([^"\\\\]{3,30})"', txt_pv, perl = TRUE))[[1]]
+      candidatos <- sub('^"String"\\s*:\\s*"(.*)"$', "\\1", matches)
+      for (c_cand in candidatos) {
+        if (eh_nome_trivial(c_cand) && c_cand != cid_principal) {
+          return(list(CID = cid_principal, Nome = limpar_nome_trivial(c_cand), Nome_Completo = nome_iupac, Fonte = "PubChem_PUGView"))
+        }
+      }
+    }
+  }
+
+  # 4. Fallback limpo: usar "CID <numero>" quando só existir nome IUPAC longo
+  rotulo_cid <- if (!is.na(cid_principal) && nzchar(cid_principal)) paste0("CID ", cid_principal) else bloco1
+  return(list(
+    CID = ifelse(is.na(cid_principal), "", cid_principal),
+    Nome = rotulo_cid,
+    Nome_Completo = ifelse(is.na(nome_iupac), "", nome_iupac),
+    Fonte = "PubChem_CID"
+  ))
+}
+
+# Carregar ou criar cache de nomes de compostos
 if (file.exists(CACHE_FILE)) {
   cache_nomes <- read.csv(CACHE_FILE, stringsAsFactors = FALSE)
+  if (!("CID" %in% names(cache_nomes))) {
+    cache_nomes <- data.frame(InChIKey = character(), CID = character(), Nome = character(), Nome_Completo = character(), Fonte = character(), stringsAsFactors = FALSE)
+  } else {
+    cache_nomes$CID <- as.character(cache_nomes$CID)
+  }
 } else {
-  cache_nomes <- data.frame(InChIKey = character(), Nome = character(), Fonte = character(), stringsAsFactors = FALSE)
+  cache_nomes <- data.frame(InChIKey = character(), CID = character(), Nome = character(), Nome_Completo = character(), Fonte = character(), stringsAsFactors = FALSE)
 }
 
-buscar_titulo_pubchem <- function(ik) {
-  url <- sprintf("https://pubchem.ncbi.nlm.nih.gov/rest/pug/compound/inchikey/%s/property/Title,IUPACName/JSON", ik)
-  res <- tryCatch(jsonlite::fromJSON(url), error = function(e) NULL)
-  if (!is.null(res) && !is.null(res$PropertyTable$Properties)) {
-    props <- res$PropertyTable$Properties
-    titulo <- if ("Title" %in% names(props)) props$Title[1] else NA_character_
-    iupac <- if ("IUPACName" %in% names(props)) props$IUPACName[1] else NA_character_
-    nome <- if (!is.na(titulo) && nzchar(titulo)) titulo else iupac
-    if (!is.na(nome) && nzchar(nome)) {
-      return(trimws(nome))
-    }
-  }
-  return(NA_character_)
-}
-
-buscar_nome_pubchem <- function(ik) {
-  nome <- buscar_titulo_pubchem(ik)
-  bloco1 <- substr(ik, 1, 14)
-  partes <- strsplit(ik, "-", fixed = TRUE)[[1]]
-  bloco2 <- if (length(partes) >= 2) partes[2] else ""
-
-  # Se o estereoisômero retornou apenas nome sistemático longo (> 30 caracteres),
-  # consulta também a conectividade plana (UHFFFAOYSA-N) para verificar se há nome trivial curto
-  if ((is.na(nome) || nchar(nome) > 30) && bloco2 != "UHFFFAOYSA") {
-    Sys.sleep(0.18)
-    flat_nome <- buscar_titulo_pubchem(paste0(bloco1, "-UHFFFAOYSA-N"))
-    if (!is.na(flat_nome) && nchar(flat_nome) <= 30) {
-      return(list(Nome = flat_nome, Fonte = "PubChem"))
-    }
-  }
-
-  if (!is.na(nome) && nzchar(nome)) {
-    return(list(Nome = nome, Fonte = "PubChem"))
-  }
-  return(list(Nome = bloco1, Fonte = "InChIKey_Fallback"))
-}
-
-faltantes <- setdiff(top_inchikeys, cache_nomes$InChIKey[cache_nomes$Fonte != "InChIKey_Fallback"])
+faltantes <- setdiff(top_inchikeys, cache_nomes$InChIKey)
 if (length(faltantes) > 0) {
-  cat(sprintf("[+] Consultando nomes no PubChem para %d ligante(s)...\n", length(faltantes)))
+  cat(sprintf("[+] Consultando nomes/CIDs no PubChem para %d composto(s)...\n", length(faltantes)))
   for (ik in faltantes) {
-    info <- buscar_nome_pubchem(ik)
+    info <- buscar_info_pubchem(ik)
     cache_nomes <- cache_nomes %>% filter(InChIKey != ik)
     cache_nomes <- bind_rows(
       cache_nomes,
-      data.frame(InChIKey = ik, Nome = info$Nome, Fonte = info$Fonte, stringsAsFactors = FALSE)
+      data.frame(
+        InChIKey = ik,
+        CID = as.character(info$CID),
+        Nome = info$Nome,
+        Nome_Completo = info$Nome_Completo,
+        Fonte = info$Fonte,
+        stringsAsFactors = FALSE
+      )
     )
-    Sys.sleep(0.22)
+    Sys.sleep(0.18)
   }
   cache_nomes <- cache_nomes %>% arrange(InChIKey)
   write.csv(cache_nomes, CACHE_FILE, row.names = FALSE)
   cat(sprintf("[✓] Cache de nomes atualizado em: %s\n", CACHE_FILE))
 }
 
-# Tratar estereoisômeros com o mesmo nome (adiciona o 2º bloco do InChIKey se houver duplicata)
-mapa_rotulos <- tibble(InChIKey = top_inchikeys) %>%
-  left_join(cache_nomes, by = "InChIKey") %>%
+# Mapear cada conectividade (Bloco1) ao seu rótulo limpo
+mapa_rotulos <- tibble(Rep_InChIKey = top_inchikeys) %>%
+  mutate(Bloco1 = substr(Rep_InChIKey, 1, 14)) %>%
+  left_join(cache_nomes, by = c("Rep_InChIKey" = "InChIKey")) %>%
   mutate(
-    Nome = ifelse(is.na(Nome) | !nzchar(Nome), substr(InChIKey, 1, 14), Nome),
-    Bloco1 = substr(InChIKey, 1, 14),
-    Bloco2 = sapply(strsplit(InChIKey, "-"), function(x) if (length(x) >= 2) substr(x[2], 1, 6) else "")
-  ) %>%
-  group_by(Bloco1) %>%
-  mutate(
-    nome_trivial_curto = {
-      curtos <- Nome[nchar(Nome) <= 30 & Fonte != "InChIKey_Fallback"]
-      if (length(curtos) > 0) curtos[1] else NA_character_
-    },
-    Nome = ifelse(!is.na(nome_trivial_curto) & nchar(Nome) > 30, nome_trivial_curto, Nome)
-  ) %>%
-  ungroup() %>%
-  mutate(
-    Nome_Curto = ifelse(nchar(Nome) > 38, paste0(substr(Nome, 1, 35), "..."), Nome)
-  ) %>%
-  group_by(Nome_Curto) %>%
-  mutate(
-    Composto = if (n() > 1) paste0(Nome_Curto, " (", Bloco2, ")") else Nome_Curto
-  ) %>%
-  ungroup()
+    Composto = ifelse(is.na(Nome) | !nzchar(Nome), paste0("CID ", CID), Nome)
+  )
 
-# Construir e salvar a matriz larga (idêntica ao formato results_insomnia.csv)
+# Construir e salvar a matriz larga (sem repetir estereoisômeros)
 dados_filtrados <- todos_resultados %>%
-  filter(InChIKey %in% top_inchikeys) %>%
-  inner_join(mapa_rotulos %>% select(InChIKey, Composto), by = "InChIKey")
+  filter(Bloco1 %in% top_blocos) %>%
+  inner_join(mapa_rotulos %>% select(Bloco1, Composto), by = "Bloco1") %>%
+  group_by(Gene, Composto) %>%
+  summarise(Docking = min(Docking, na.rm = TRUE), .groups = "drop")
 
 ordem_compostos <- dados_filtrados %>%
   group_by(Composto) %>%
@@ -285,7 +405,7 @@ p <- ggplot(dados_long, aes(x = Composto, y = Gene, fill = Docking)) +
     plot.title = element_text(face = "bold", hjust = 0.5),
     plot.subtitle = element_text(hjust = 0.5),
     legend.position = "right",
-    plot.margin = margin(10, 20, 15, 55),
+    plot.margin = margin(10, 20, 15, 30),
     plot.background = element_rect(fill = "white", color = NA)
   )
 
