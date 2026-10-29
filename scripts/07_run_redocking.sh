@@ -104,9 +104,16 @@ else
     echo "[.] Ligante cristalográfico existente mantido: ${LIG_RAW_PDB}"
 fi
 
-# Passo 2: Calcular centróide da cavidade e atualizar config.txt se necessário
+# Passo 2: Calcular centróide da cavidade (colunas fixas PDB v3.3: 31-38, 39-46, 47-54) e atualizar config.txt
 if [ -f "$LIG_RAW_PDB" ]; then
-    COORD_DATA=$(awk '/^(ATOM|HETATM)/ {sumx+=$7; sumy+=$8; sumz+=$9; n++} END {if(n>0) printf "%.3f %.3f %.3f", sumx/n, sumy/n, sumz/n}' "$LIG_RAW_PDB")
+    COORD_DATA=$(awk '/^(ATOM  |HETATM)/ {
+        x = substr($0, 31, 8) + 0;
+        y = substr($0, 39, 8) + 0;
+        z = substr($0, 47, 8) + 0;
+        sumx += x; sumy += y; sumz += z; n++
+    } END {
+        if (n > 0) printf "%.3f %.3f %.3f", sumx/n, sumy/n, sumz/n
+    }' "$LIG_RAW_PDB")
     if [ -n "$COORD_DATA" ]; then
         read -r CALC_CX CALC_CY CALC_CZ <<< "$COORD_DATA"
         echo "[✓] Centro do sítio ativo calculado a partir do ligante nativo:"
@@ -116,8 +123,10 @@ if [ -f "$LIG_RAW_PDB" ]; then
 
         if [ -f "$CONFIG_TXT" ]; then
             CURRENT_CX=$(grep -E '^[[:space:]]*center_x[[:space:]]*=' "$CONFIG_TXT" | awk -F '=' '{gsub(/[[:space:]]/,"",$2); print $2}')
-            if [ -z "$CURRENT_CX" ]; then
-                echo "[+] Preenchendo coordenadas automaticamente em ${CONFIG_TXT}..."
+            CURRENT_CY=$(grep -E '^[[:space:]]*center_y[[:space:]]*=' "$CONFIG_TXT" | awk -F '=' '{gsub(/[[:space:]]/,"",$2); print $2}')
+            CURRENT_CZ=$(grep -E '^[[:space:]]*center_z[[:space:]]*=' "$CONFIG_TXT" | awk -F '=' '{gsub(/[[:space:]]/,"",$2); print $2}')
+            if [ -z "$CURRENT_CX" ] || [ "$CURRENT_CX" != "$CALC_CX" ] || [ "$CURRENT_CY" != "$CALC_CY" ] || [ "$CURRENT_CZ" != "$CALC_CZ" ]; then
+                echo "[+] Atualizando coordenadas do centro em ${CONFIG_TXT}..."
                 sed -i "s/^[[:space:]]*center_x[[:space:]]*=.*/center_x = ${CALC_CX}/" "$CONFIG_TXT"
                 sed -i "s/^[[:space:]]*center_y[[:space:]]*=.*/center_y = ${CALC_CY}/" "$CONFIG_TXT"
                 sed -i "s/^[[:space:]]*center_z[[:space:]]*=.*/center_z = ${CALC_CZ}/" "$CONFIG_TXT"
@@ -178,6 +187,8 @@ try:
         redock_heavy = Chem.RemoveHs(redock)
         rmsd = rdMolAlign.CalcRMS(redock_heavy, ref_heavy)
         print(f'    RMSD (Heavy Atoms): {rmsd:.2f} Å')
+        with open('${REDOCK_DIR}/rmsd_result.txt', 'w', encoding='utf-8') as rf:
+            rf.write(f'TARGET=${TARGET}\nPDB_ID=${PDB_ID}\nNATIVE_LIG=${NATIVE_LIG}\nRMSD_HEAVY_A={rmsd:.4f}\n')
         if rmsd <= 2.0:
             print('    [✓] Validação: SUCESSO! RMSD <= 2.0 Å (Parâmetros de docking validados)')
         else:

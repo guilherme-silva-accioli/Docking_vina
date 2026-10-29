@@ -81,7 +81,13 @@ energy_range = ${ENERGY_RANGE:-3}
 EOF
     echo "    [+] Criado arquivo de configuração: ${CONFIG_VINA}"
 else
-    echo "    [.] Arquivo de configuração existente mantido: ${CONFIG_VINA}"
+    sed -i "s/^[[:space:]]*size_x[[:space:]]*=.*/size_x = ${SIZE_X:-22.0}/" "$CONFIG_VINA"
+    sed -i "s/^[[:space:]]*size_y[[:space:]]*=.*/size_y = ${SIZE_Y:-22.0}/" "$CONFIG_VINA"
+    sed -i "s/^[[:space:]]*size_z[[:space:]]*=.*/size_z = ${SIZE_Z:-22.0}/" "$CONFIG_VINA"
+    sed -i "s/^[[:space:]]*exhaustiveness[[:space:]]*=.*/exhaustiveness = ${EXHAUSTIVENESS:-8}/" "$CONFIG_VINA"
+    sed -i "s/^[[:space:]]*num_modes[[:space:]]*=.*/num_modes = ${NUM_MODES:-9}/" "$CONFIG_VINA"
+    sed -i "s/^[[:space:]]*energy_range[[:space:]]*=.*/energy_range = ${ENERGY_RANGE:-3}/" "$CONFIG_VINA"
+    echo "    [.] Arquivo de configuração sincronizado: ${CONFIG_VINA}"
 fi
 
 echo "[✓] Estrutura do alvo '${TARGET}' pronta!"
