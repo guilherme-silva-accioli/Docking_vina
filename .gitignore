@@ -13,6 +13,5 @@ __pycache__/
 *~
 .~lock.*
 
-# Binários PDF/XML de artigos (mantendo catálogo e Markdowns versionados)
-papers/pdfs/
-papers/xml/
+# Artigos e arquivos da pasta papers/
+papers/
